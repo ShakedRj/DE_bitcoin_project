@@ -1,0 +1,189 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import from_json, col, to_date
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+import shutil
+import os
+
+# Clear checkpoint directories
+if os.path.exists("/tmp/checkpoints/s3"):
+    shutil.rmtree("/tmp/checkpoints/s3")
+if os.path.exists("/tmp/checkpoints/postgres"):
+    shutil.rmtree("/tmp/checkpoints/postgres")
+
+# Initialize Spark session with Kafka, Hadoop AWS, and PostgreSQL packages
+spark = SparkSession.builder \
+    .appName("KafkaToS3AndPostgres") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4,org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.2.18") \
+    .config("spark.hadoop.fs.s3a.access.key", "AKIA3FLD45LCS7HDIQGG") \
+    .config("spark.hadoop.fs.s3a.secret.key", "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") \
+    .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
+    .getOrCreate()
+
+# Define Kafka parameters
+kafka_bootstrap_servers = "course-kafka:9092"
+kafka_topic = "FinancialBTC"
+
+# Define S3 parameters
+s3_bucket = "financialbtc1"
+s3_path = f"s3a://{s3_bucket}/kafka-data/"
+
+# Define PostgreSQL parameters
+postgres_url = "jdbc:postgresql://postgres:5432/postgres"
+postgres_properties = {
+    "user": "postgres",
+    "password": "postgres",
+    "driver": "org.postgresql.Driver"
+}
+
+# Define schema for the Kafka message
+schema = StructType([
+    StructField("created_at", StringType(), True),
+    StructField("stock", StringType(), True),
+    StructField("link", StringType(), True),
+    StructField("serpapi_link", StringType(), True),
+    StructField("name", StringType(), True),
+    StructField("price", DoubleType(), True),
+    StructField("price_movement_percentage", DoubleType(), True),
+    StructField("price_movement_value", DoubleType(), True),
+    StructField("price_movement", StringType(), True)
+])
+
+# Read data from Kafka
+kafka_df = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", kafka_bootstrap_servers) \
+    .option("subscribe", kafka_topic) \
+    .load()
+
+# Parse the JSON data
+parsed_df = kafka_df.selectExpr("CAST(value AS STRING)") \
+    .select(from_json(col("value"), schema).alias("data")) \
+    .select("data.*")
+
+# Filter for Bitcoin data and include created_at
+filtered_df = parsed_df.filter(col("stock") == "BTC-USD")
+
+# Write data to S3 with partitioning by date
+s3_query = filtered_df.withColumn("date", to_date(col("created_at"))) \
+    .writeStream \
+    .format("parquet") \
+    .option("path", s3_path) \
+    .option("checkpointLocation", "/tmp/checkpoints/s3") \
+    .partitionBy("date") \
+    .start()
+
+# Write data to PostgreSQL
+def write_to_postgres(batch_df, batch_id):
+    try:
+        batch_df.show()  # Show the DataFrame to verify the schema and data
+        null_count = batch_df.filter(batch_df.stock.isNull()).count()
+        print(f"Batch {batch_id} has {null_count} null rows.")
+        if null_count == 0:
+            batch_df.write.jdbc(url=postgres_url, table="bitcoin_data", mode="append", properties=postgres_properties)
+            print(f"Batch {batch_id} written to PostgreSQL successfully.")
+        else:
+            print(f"Batch {batch_id} contains null values and will not be written to PostgreSQL.")
+    except Exception as e:
+        print(f"Error writing batch {batch_id} to PostgreSQL: {e}")
+
+postgres_query = filtered_df.writeStream \
+    .foreachBatch(write_to_postgres) \
+    .option("checkpointLocation", "/tmp/checkpoints/postgres") \
+    .start()
+
+s3_query.awaitTermination()
+postgres_query.awaitTermination()from pyspark.sql import SparkSession
+from pyspark.sql.functions import from_json, col, to_date
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+import shutil
+import os
+
+# Clear checkpoint directories
+if os.path.exists("/tmp/checkpoints/s3"):
+    shutil.rmtree("/tmp/checkpoints/s3")
+if os.path.exists("/tmp/checkpoints/postgres"):
+    shutil.rmtree("/tmp/checkpoints/postgres")
+
+# Initialize Spark session with Kafka, Hadoop AWS, and PostgreSQL packages
+spark = SparkSession.builder \
+    .appName("KafkaToS3AndPostgres") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4,org.apache.hadoop:hadoop-aws:3.3.4,org.postgresql:postgresql:42.2.18") \
+    .config("spark.hadoop.fs.s3a.access.key", "AKIA3FLD45LCS7HDIQGG") \
+    .config("spark.hadoop.fs.s3a.secret.key", "") \
+    .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
+    .getOrCreate()
+
+# Define Kafka parameters
+kafka_bootstrap_servers = "course-kafka:9092"
+kafka_topic = "FinancialBTC"
+
+# Define S3 parameters
+s3_bucket = "financialbtc1"
+s3_path = f"s3a://{s3_bucket}/kafka-data/"
+
+# Define PostgreSQL parameters
+postgres_url = "jdbc:postgresql://postgres:5432/postgres"
+postgres_properties = {
+    "user": "postgres",
+    "password": "postgres",
+    "driver": "org.postgresql.Driver"
+}
+
+# Define schema for the Kafka message
+schema = StructType([
+    StructField("created_at", StringType(), True),
+    StructField("stock", StringType(), True),
+    StructField("link", StringType(), True),
+    StructField("serpapi_link", StringType(), True),
+    StructField("name", StringType(), True),
+    StructField("price", DoubleType(), True),
+    StructField("price_movement_percentage", DoubleType(), True),
+    StructField("price_movement_value", DoubleType(), True),
+    StructField("price_movement", StringType(), True)
+])
+
+# Read data from Kafka
+kafka_df = spark.readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", kafka_bootstrap_servers) \
+    .option("subscribe", kafka_topic) \
+    .load()
+
+# Parse the JSON data
+parsed_df = kafka_df.selectExpr("CAST(value AS STRING)") \
+    .select(from_json(col("value"), schema).alias("data")) \
+    .select("data.*")
+
+# Filter for Bitcoin data and include created_at
+filtered_df = parsed_df.filter(col("stock") == "BTC-USD")
+
+# Write data to S3 with partitioning by date
+s3_query = filtered_df.withColumn("date", to_date(col("created_at"))) \
+    .writeStream \
+    .format("parquet") \
+    .option("path", s3_path) \
+    .option("checkpointLocation", "/tmp/checkpoints/s3") \
+    .partitionBy("date") \
+    .start()
+
+# Write data to PostgreSQL
+def write_to_postgres(batch_df, batch_id):
+    try:
+        batch_df.show()  # Show the DataFrame to verify the schema and data
+        null_count = batch_df.filter(batch_df.stock.isNull()).count()
+        print(f"Batch {batch_id} has {null_count} null rows.")
+        if null_count == 0:
+            batch_df.write.jdbc(url=postgres_url, table="bitcoin_data", mode="append", properties=postgres_properties)
+            print(f"Batch {batch_id} written to PostgreSQL successfully.")
+        else:
+            print(f"Batch {batch_id} contains null values and will not be written to PostgreSQL.")
+    except Exception as e:
+        print(f"Error writing batch {batch_id} to PostgreSQL: {e}")
+
+postgres_query = filtered_df.writeStream \
+    .foreachBatch(write_to_postgres) \
+    .option("checkpointLocation", "/tmp/checkpoints/postgres") \
+    .start()
+
+s3_query.awaitTermination()
+postgres_query.awaitTermination()
